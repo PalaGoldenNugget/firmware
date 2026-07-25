@@ -146,6 +146,13 @@ static int _i2s_init(uint8_t port, esp_codec_dev_type_t dev_type, codec_init_cfg
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
     i2s_chan_config_t chan_cfg = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
     chan_cfg.auto_clear = true;
+    // Enlarge the RX DMA buffer so a slow e-ink refresh (~0.3s, which blocks the
+    // single-threaded audio pump) can't overflow it and drop samples during long
+    // recording. Default is ~6 desc x 240 frames (~90 ms). We give ~1 s of
+    // headroom: 10 descriptors x 1024 frames at 16 kHz ~= 640 ms per fill, well
+    // over the refresh stall. Costs ~40 KB of DMA-capable RAM, fine here.
+    chan_cfg.dma_desc_num  = 10;
+    chan_cfg.dma_frame_num = 1024;
     i2s_std_config_t std_cfg = {
         .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(16000),
         .slot_cfg = I2S_STD_MSB_SLOT_DEFAULT_CONFIG(32, I2S_SLOT_MODE_STEREO),

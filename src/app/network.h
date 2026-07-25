@@ -13,6 +13,7 @@ enum SyncError {
 bool transcribe(const String& wavPath, int noteNum);
 void transcribeAll();
 SyncError lastSyncError();   // reason for the most recent transcribeAll() pass
+bool syncWasCancelled();     // true if the last transcribeAll() was cancelled by a button press
 
 // Ask the chat model a question (already-transcribed text). On success returns
 // true and puts the reply in `answerOut`. On failure returns false and sets the
@@ -35,6 +36,7 @@ String urlDecodeSimple(String s);
 String portalCss();
 
 void handlePortalRoot();
+void handleSync();
 void handlePortalJson();
 void handleExportTxt();
 void sendFileByNum(const char* ext, const char* mime, bool attachment);

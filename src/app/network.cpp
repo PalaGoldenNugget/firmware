@@ -42,6 +42,8 @@ static String parseWhisperText(const String& resp) {
 // Reason the most recent transcription pass failed (read by the UI).
 static SyncError g_syncError = SYNC_OK;
 
+static bool checkSyncCancel();   // fwd decl: latches cancel flag from a button press
+
 static bool transcribeOnce(const String& wavPath, int noteNum, String* outText = nullptr) {
   File f = SD_MMC.open(wavPath.c_str());
   if (!f) return false;
@@ -55,7 +57,7 @@ static bool transcribeOnce(const String& wavPath, int noteNum, String* outText =
 
   WiFiClientSecure client;
   client.setInsecure();  // TODO: pin api.openai.com cert for production use
-  client.setTimeout(90);
+  client.setTimeout(WHISPER_TIMEOUT_MS / 1000);
 
   if (!client.connect("api.openai.com", 443)) { g_syncError = SYNC_ERR_NETWORK; f.close(); return false; }
 
@@ -74,12 +76,18 @@ static bool transcribeOnce(const String& wavPath, int noteNum, String* outText =
     int n = f.read(chunk, 4096);
     if (n <= 0) break;
     client.write(chunk, n);
+    // Watch the buttons DURING the upload so a quick tap is caught (there's no
+    // background button watcher; this loop is the only code running now). We
+    // only LATCH the cancel flag here — we do NOT abort the transfer, so the
+    // current chunk finishes cleanly and cancellation happens at the next
+    // between-chunks / between-notes check-point.
+    checkSyncCancel();
   }
   heap_caps_free(chunk);
   f.close();
   client.print(post);
 
-  uint32_t deadline = millis() + 90000;
+  uint32_t deadline = millis() + WHISPER_TIMEOUT_MS;
   while (!client.available() && millis() < deadline) delay(20);
 
   String resp = "";
@@ -128,12 +136,156 @@ bool transcribeToText(const String& wavPath, String& out) {
   return false;
 }
 
+static bool transcribeChunked(const String& wavPath, int noteNum);
+
+// Sync cancellation: a single press of either button during a sync latches this
+// flag, which is checked between notes and between chunks (we can't interrupt an
+// upload mid-transfer since the network call blocks). Cleared at each pass start.
+static bool g_syncCancel = false;
+bool syncWasCancelled() { return g_syncCancel; }
+
+// Overall notes progress, set by transcribeAll() so transcribeChunked() can
+// redraw the full two-bar syncing screen (this-note + all-notes) per chunk.
+static int g_syncDone = 0;
+static int g_syncTotal = 0;
+
+static bool checkSyncCancel() {
+  if (g_syncCancel) return true;
+  if (digitalRead(BTN_REC) == LOW || digitalRead(BTN_PWR) == LOW) {
+    g_syncCancel = true;
+    Serial.println("[Sync] cancel requested");
+  }
+  return g_syncCancel;
+}
+
 bool transcribe(const String& wavPath, int noteNum) {
+  // Files over the API size limit must be split into chunks (a 30-min recording
+  // is ~57MB, well over the 25MB Whisper limit).
+  File probe = SD_MMC.open(wavPath.c_str());
+  uint32_t sz = probe ? probe.size() : 0;
+  if (probe) probe.close();
+  if (sz > WHISPER_MAX_BYTES) {
+    Serial.printf("[Whisper] %s is %lu bytes, chunking\n", wavPath.c_str(), (unsigned long)sz);
+    return transcribeChunked(wavPath, noteNum);
+  }
+
   for (int attempt = 0; attempt < 3; attempt++) {
     if (transcribeOnce(wavPath, noteNum)) return true;
     if (attempt < 2) { Serial.printf("[Whisper] retry %d/2\n", attempt + 1); delay(3000); }
   }
   return false;
+}
+
+// Write a standalone WAV (44-byte header + PCM) for one chunk.
+static bool writeChunkWav(const char* path, File& src, uint32_t pcmOffset,
+                          uint32_t pcmBytes) {
+  File out = SD_MMC.open(path, FILE_WRITE);
+  if (!out) return false;
+
+  uint32_t dB = pcmBytes, fS = dB + 36, bR = SAMPLE_RATE * 2;
+  uint16_t bA = 2, aF = 1, ch = 1, bps = 16;
+  uint32_t fL = 16, sr = SAMPLE_RATE;
+  out.write((uint8_t*)"RIFF",4); out.write((uint8_t*)&fS,4);
+  out.write((uint8_t*)"WAVE",4); out.write((uint8_t*)"fmt ",4);
+  out.write((uint8_t*)&fL,4);   out.write((uint8_t*)&aF,2);
+  out.write((uint8_t*)&ch,2);   out.write((uint8_t*)&sr,4);
+  out.write((uint8_t*)&bR,4);   out.write((uint8_t*)&bA,2);
+  out.write((uint8_t*)&bps,2);
+  out.write((uint8_t*)"data",4); out.write((uint8_t*)&dB,4);
+
+  // Copy the PCM slice from the source.
+  src.seek(44 + pcmOffset);
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_8BIT);
+  if (!buf) { out.close(); return false; }
+  uint32_t remaining = pcmBytes;
+  while (remaining > 0) {
+    int want = remaining > 4096 ? 4096 : remaining;
+    int n = src.read(buf, want);
+    if (n <= 0) break;
+    out.write(buf, n);
+    remaining -= n;
+  }
+  heap_caps_free(buf);
+  out.close();
+  return true;
+}
+
+// Transcribe a WAV too large for the API by splitting it into overlapping
+// ~CHUNK_SECONDS slices, transcribing each, and concatenating the text. Only
+// one temp chunk exists on SD at a time (deleted after each). Writes the
+// combined transcript next to the source and updates the note index.
+static bool transcribeChunked(const String& wavPath, int noteNum) {
+  File src = SD_MMC.open(wavPath.c_str());
+  if (!src) return false;
+  uint32_t fileSize = src.size();
+  if (fileSize <= 44) { src.close(); return false; }
+  uint32_t pcmTotal = fileSize - 44;
+
+  const uint32_t bytesPerSec = (uint32_t)SAMPLE_RATE * 2;
+  const uint32_t chunkBytes  = CHUNK_SECONDS   * bytesPerSec;
+  const uint32_t overlapBytes= CHUNK_OVERLAP_SEC * bytesPerSec;
+
+  const char* tmp = "/chunk_tmp.wav";
+  String combined;
+  uint32_t offset = 0;
+  int chunkNum = 0;
+
+  // Precompute total chunk count for the progress bar (mirror the advance math).
+  int totalChunks = 0;
+  {
+    uint32_t o = 0;
+    while (o < pcmTotal) {
+      uint32_t tb = pcmTotal - o; if (tb > chunkBytes) tb = chunkBytes;
+      totalChunks++;
+      if (tb < chunkBytes) break;
+      o += chunkBytes - overlapBytes;
+    }
+    if (totalChunks < 1) totalChunks = 1;
+  }
+
+  while (offset < pcmTotal) {
+    if (checkSyncCancel()) { src.close(); return false; }   // cancelled between chunks
+    // Redraw both bars: top = this note's chunk progress, bottom = all notes.
+    // chunkNum is 0-based; show it as "chunk (n+1)/total" for the one in progress.
+    showTranscribing(g_syncDone, g_syncTotal, chunkNum + 1, totalChunks, noteNum);
+    uint32_t thisBytes = pcmTotal - offset;
+    if (thisBytes > chunkBytes) thisBytes = chunkBytes;
+
+    Serial.printf("[Whisper] chunk %d: offset %lu, %lu bytes\n",
+                  chunkNum, (unsigned long)offset, (unsigned long)thisBytes);
+
+    if (!writeChunkWav(tmp, src, offset, thisBytes)) { src.close(); return false; }
+
+    String part;
+    bool ok = transcribeToText(String(tmp), part);
+    SD_MMC.remove(tmp);                       // delete temp before next chunk
+
+    if (!ok) {
+      // Credit/auth errors won't fix themselves across chunks — bail.
+      if (g_syncError == SYNC_ERR_NO_CREDIT || g_syncError == SYNC_ERR_AUTH) {
+        src.close(); return false;
+      }
+      // Otherwise skip this chunk but keep going.
+      Serial.printf("[Whisper] chunk %d failed, skipping\n", chunkNum);
+    } else {
+      if (combined.length() > 0) combined += " ";
+      combined += part;
+    }
+
+    if (thisBytes < chunkBytes) break;        // was the last chunk
+    // Advance, stepping back by the overlap so no word is lost at the seam.
+    offset += chunkBytes - overlapBytes;
+    chunkNum++;
+  }
+  src.close();
+
+  if (combined.length() == 0) return false;
+
+  String tp = wavPath; tp.replace(".wav", ".txt");
+  File tf = SD_MMC.open(tp.c_str(), FILE_WRITE);
+  if (tf) { tf.print(combined); tf.close(); }
+  updateIndexHasText(noteNum);
+  return true;
 }
 
 SyncError lastSyncError() { return g_syncError; }
@@ -348,15 +500,26 @@ bool botAsk(const String& question, String& answerOut) {
 
 void transcribeAll() {
   g_syncError = SYNC_OK;                 // reset at the start of each pass
+  g_syncCancel = false;                  // clear any stale cancel
   int pending = 0;
   for (int i=0; i<(int)noteIndex.size(); i++) if(!noteIndex[i].hasText) pending++;
   int done = 0;
+  g_syncTotal = pending;
   for (int i=0; i<(int)noteIndex.size(); i++) {
     if (noteIndex[i].hasText) continue;
-    showTranscribing(done, pending);
+    if (checkSyncCancel()) return;       // cancelled between notes
+    g_syncDone = done;
+
+    // Short-note progress: show 50% (1/2) while it's working, then 100% (2/2)
+    // when it completes, so the "this note" bar visibly moves. Long recordings
+    // ignore this — the chunker redraws the top bar with real chunk progress.
+    showTranscribing(done, pending, 1, 2, noteIndex[i].num);
+
     char wp[64]; snprintf(wp, sizeof(wp), "%s/note_%03d.wav", NOTES_DIR, noteIndex[i].num);
     if (transcribe(String(wp), noteIndex[i].num)) {
       done++;
+      // Brief 100% on this note before moving to the next.
+      showTranscribing(done, pending, 2, 2, noteIndex[i].num);
     } else if (g_syncError == SYNC_ERR_NO_CREDIT || g_syncError == SYNC_ERR_AUTH) {
       // No point hammering the API for every note when the account/key is the
       // problem — stop the pass so the UI can show the reason promptly.
@@ -454,6 +617,13 @@ void handlePortalRoot() {
   html += "<a class='btn primary' href='/export.txt'>Download all TXT</a>";
   if (filter != "All")
     html += "<a class='btn' href='/export.txt?tag=" + filter + "'>Download " + htmlEscape(filter) + " TXT</a>";
+  // Sync button — transcribes any notes that don't have text yet.
+  int untranscribed = 0;
+  for (int i = 0; i < (int)noteIndex.size(); i++) if (!noteIndex[i].hasText) untranscribed++;
+  if (untranscribed > 0)
+    html += "<a class='btn' href='/sync' onclick=\"this.innerHTML='Syncing…';this.classList.add('primary');\">Sync " + String(untranscribed) + " note" + (untranscribed == 1 ? "" : "s") + "</a>";
+  else
+    html += "<span class='btn' style='opacity:.5'>All synced</span>";
   html += "</div>";
 
   int visibleCount = 0;
@@ -515,6 +685,41 @@ void handlePortalRoot() {
           "</script>";
   html += "</div></body></html>";
   transferServer.send(200, "text/html", html);
+}
+
+// Browser-triggered sync. WiFi is already up (we're in transfer mode), so we
+// run transcription right here. The request blocks until sync finishes, then
+// returns a result page. The device screen also shows syncing progress, and the
+// on-device hold-to-cancel still works during this.
+void handleSync() {
+  transcribeAll();          // shows the syncing screen on the device as it goes
+  loadIndex();
+
+  int remaining = 0;
+  for (int i = 0; i < (int)noteIndex.size(); i++) if (!noteIndex[i].hasText) remaining++;
+
+  String msg, sub;
+  SyncError e = lastSyncError();
+  if (syncWasCancelled())            { msg = "Sync stopped"; sub = "Cancelled on the device."; }
+  else if (e == SYNC_ERR_NO_CREDIT)  { msg = "Insufficient credit"; sub = "Add funds to your OpenAI account."; }
+  else if (e == SYNC_ERR_AUTH)       { msg = "API key rejected"; sub = "Check the key in secrets.h."; }
+  else if (e == SYNC_ERR_HTTP || e == SYNC_ERR_NETWORK) { msg = "Sync failed"; sub = "Could not reach the server."; }
+  else if (remaining == 0)           { msg = "All synced"; sub = "Every note is transcribed."; }
+  else                               { msg = "Partly synced"; sub = String(remaining) + " note(s) still pending."; }
+
+  String html = "<!doctype html><html><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Sync</title>" + portalCss() + "</head><body><div class='wrap'>";
+  html += "<div class='top'><div><h1>sync</h1><div class='sub'>" + htmlEscape(sub) + "</div></div></div>";
+  html += "<div class='actions'><span class='btn primary'>" + htmlEscape(msg) + "</span> "
+          "<a class='btn' href='/'>Back to notes</a></div>";
+  html += "</div></body></html>";
+  transferServer.send(200, "text/html", html);
+
+  // Return the device screen to transfer mode (show the portal URL again).
+  IPAddress ip = WiFi.localIP();
+  String url = "http://" + ip.toString();
+  showTransferMode(url.c_str());
 }
 
 void handlePortalJson() {
@@ -687,6 +892,7 @@ void setupTransferServer() {
   transferServer.on("/tag/delete", HTTP_GET, handleTagDelete);
   transferServer.on("/note/delete", HTTP_GET, handleNoteDelete);
   transferServer.on("/api/notes", HTTP_GET, handlePortalJson);
+  transferServer.on("/sync", HTTP_GET, handleSync);
   transferServer.on("/export.txt", HTTP_GET, handleExportTxt);
   transferServer.on("/txt",   HTTP_GET, [](){ sendFileByNum("txt", "text/plain", true); });
   transferServer.on("/wav",   HTTP_GET, [](){ sendFileByNum("wav", "audio/wav",  true); });

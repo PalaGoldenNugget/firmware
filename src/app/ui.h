@@ -45,7 +45,7 @@ void showTagBrowser(int cursor);
 void showNoteList(int cursor);
 void showNoteDetail(int cursor);
 void showDeleteConfirm(int noteNum);
-void showTranscribing(int done, int total);
+void showTranscribing(int done, int total, int chunkDone = 0, int chunkTotal = 0, int noteNum = -1);
 void showWifiConnecting(int attempt, int maxA);
 void drawWifiCorner();
 void showOpenApConfirm(const String& ssid);

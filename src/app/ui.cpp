@@ -513,20 +513,59 @@ void showDeleteConfirm(int noteNum) {
   refresh();
 }
 
-void showTranscribing(int done, int total) {
+// Two stacked progress bars:
+//   top    = current note's chunk progress (chunkDone / chunkTotal)
+//   bottom = overall notes progress (done / total)
+// For a short (single-request) note, pass chunkTotal <= 1 and the top bar just
+// shows a full/working state.
+void showTranscribing(int done, int total, int chunkDone, int chunkTotal, int noteNum) {
   clearWhite();
-  drawKicker("syncing", 20);
-  iconThinking(100, 76);
-  int barW = 144, barH = 10, barX = 28, barY = 116;
-  strokeRoundRect(barX, barY, barW, barH, 5, 1, BLACK);
+  drawKicker("syncing", 16);
+
+  const int barW = 144, barH = 10, barX = 28;
+
+  // --- Top bar: current note (chunks / short-note %) ---
+  // Label above the bar names the note being worked on; caption below shows
+  // progress (percentage, or "chunk N/M" for long recordings).
+  int topLabelY = 46;
+  int topBarY   = 64;
+  int topCapY   = 80;
+  if (noteNum >= 0) {
+    char lbl[16]; snprintf(lbl, sizeof(lbl), "Note %d", noteNum);
+    drawStrC(100, topLabelY, lbl, 1, BLACK);
+  } else {
+    drawStrC(100, topLabelY, "this note", 1, BLACK);
+  }
+  strokeRoundRect(barX, topBarY, barW, barH, 5, 1, BLACK);
+  if (chunkTotal > 1) {
+    int fill = (chunkDone * (barW - 4)) / chunkTotal;
+    if (fill > 0) fillRoundRect(barX + 2, topBarY + 2, fill, barH - 4, 3, BLACK);
+    int pctThis = (chunkDone * 100) / chunkTotal;
+    char c[24];
+    if (chunkTotal > 2) snprintf(c, sizeof(c), "chunk %d / %d", chunkDone, chunkTotal);
+    else                snprintf(c, sizeof(c), "%d%%", pctThis);
+    drawStrC(100, topCapY, c, 1, BLACK);
+  } else {
+    fillRoundRect(barX + 2, topBarY + 2, barW - 4, barH - 4, 3, BLACK);
+    drawStrC(100, topCapY, "working", 1, BLACK);
+  }
+
+  // --- Bottom bar: overall notes ---
+  int botLabelY = 110;
+  int botBarY   = 128;
+  int botCapY   = 144;
+  drawStrC(100, botLabelY, "all notes", 1, BLACK);
+  strokeRoundRect(barX, botBarY, barW, barH, 5, 1, BLACK);
   if (total > 0) {
     int fill = (done * (barW - 4)) / max(total, 1);
-    if (fill > 0) fillRoundRect(barX+2, barY+2, fill, barH-4, 3, BLACK);
+    if (fill > 0) fillRoundRect(barX + 2, botBarY + 2, fill, barH - 4, 3, BLACK);
     char b[20]; snprintf(b, sizeof(b), "%d / %d", done, total);
-    drawStrC(100, 142, b, 1, BLACK);
+    drawStrC(100, botCapY, b, 1, BLACK);
   } else {
-    drawStrC(100, 142, "please wait", 1, BLACK);
+    drawStrC(100, botCapY, "please wait", 1, BLACK);
   }
+
+  drawStrC(100, 178, "tap to stop", 1, BLACK);
   refresh();
 }
 
