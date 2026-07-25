@@ -83,6 +83,12 @@
 #define BOT_TAG            "Bot"       // reserved tag for saved Q&A notes
 #define BOT_REC_DOUBLE_MS  300         // window to detect a BOOT double-press
 
+/* Whisper transcription / chunking */
+#define WHISPER_TIMEOUT_MS   240000UL   // 4 min per request (large uploads are slow on ESP32)
+#define WHISPER_MAX_BYTES    24000000UL // API hard limit is 25MB; stay safely under
+#define CHUNK_SECONDS        600        // ~10 min per chunk (~19MB at 16kHz mono 16-bit)
+#define CHUNK_OVERLAP_SEC    2          // overlap so no word is lost at a seam
+
 /* Battery warning */
 #define BAT_CHECK_INTERVAL_MS  30000
 #define BAT_LOW_THRESHOLD      15
@@ -90,7 +96,7 @@
 
 /* Time & firmware */
 #define LOCAL_TIME_OFFSET_MIN  120   // UTC+2 (Germany summer). Set to your offset.
-#define FIRMWARE_VERSION       "v1.1"
-#define FW_VERSION             "v1.1"
+#define FIRMWARE_VERSION       "v1.2"
+#define FW_VERSION             "v1.2"
 
 #endif // CONFIG_H

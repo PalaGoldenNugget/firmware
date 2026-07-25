@@ -323,7 +323,14 @@ void startSyncFlow() {
     // Surface a specific reason if the pass failed, instead of silently
     // finishing on a hang. 429 = no OpenAI credit; 401 = bad API key.
     SyncError err = lastSyncError();
-    if (err == SYNC_ERR_NO_CREDIT) {
+    if (syncWasCancelled()) {
+      showError("SYNC STOPPED");
+      soundBack();
+      // Wait for the cancel button to be released so it doesn't carry into the
+      // next screen (e.g. a held BOOT starting a note).
+      while (digitalRead(BTN_REC) == LOW || digitalRead(BTN_PWR) == LOW) delay(5);
+      delay(400);
+    } else if (err == SYNC_ERR_NO_CREDIT) {
       showSyncError("Insufficient", "ChatGPT credit.", "Add funds.");
       soundDelete();
       delay(3200);
