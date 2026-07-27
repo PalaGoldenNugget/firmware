@@ -4,8 +4,12 @@
 // Primary network (also used as the compiled fallback).
 #define WIFI_SSID   "...."
 #define WIFI_PASS   "...."
-// You need to fund your OPENAI / ChatGPT account (https://platform.openai.com/settings/organization/billing/overview) in order to get the transcription and query option to work then enter the key below
 #define OPENAI_KEY  "...."
+
+// ElevenLabs text-to-speech (reads bot answers aloud). Get the key from your
+// ElevenLabs Profile page, and a voice ID from the Voices page (or the API).
+#define ELEVENLABS_KEY      "...."
+#define ELEVENLABS_VOICE_ID "21m00Tcm4TlvDq8ikWAM"   // default "Rachel" voice; replace as desired
 
 // Additional known networks. The device scans, then connects to the strongest
 // one it can see from this list (plus any in /wifi.txt on the SD card). Add as
