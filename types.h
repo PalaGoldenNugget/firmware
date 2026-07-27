@@ -28,7 +28,7 @@ struct NoteEntry { int num; char tag[32]; bool hasText; };
 // Content array sizes — used across notes, ui, and main loop.
 #define DEFAULT_TAG_COUNT 7
 #define MENU_COUNT        4
-#define SETTINGS_COUNT    3
+#define SETTINGS_COUNT    4
 
 extern const char* DEFAULT_TAGS[];
 extern const char* MENU_ITEMS[];

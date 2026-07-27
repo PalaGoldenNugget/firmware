@@ -55,6 +55,7 @@
 /* Audio */
 #define SAMPLE_RATE  16000
 #define REC_BUF      (8 * 1024)
+#define MIN_NOTE_SECONDS 1     // notes shorter than this (in seconds) are discarded
 
 /* Storage paths */
 #define NOTES_DIR  "/notes"
@@ -83,6 +84,15 @@
 #define BOT_TAG            "Bot"       // reserved tag for saved Q&A notes
 #define BOT_REC_DOUBLE_MS  300         // window to detect a BOOT double-press
 
+/* Text-to-speech (ElevenLabs reads bot answers aloud) */
+#define TTS_ENABLED        1                    // set 0 to disable read-aloud
+#define TTS_MODEL          "eleven_flash_v2_5"  // fast, low-cost; good for short answers
+#define TTS_OUTPUT_FORMAT  "pcm_16000"          // matches the device's native 16kHz playback
+#define TTS_TMP_PCM        "/tts.pcm"           // temp raw-PCM file on SD
+#define TTS_TIMEOUT_MS     60000UL              // per request
+#define TTS_MAX_CHARS      800                  // cap answer length sent to TTS (cost/latency)
+#define TTS_VOLUME         85                   // playback volume for spoken answers
+
 /* Whisper transcription / chunking */
 #define WHISPER_TIMEOUT_MS   240000UL   // 4 min per request (large uploads are slow on ESP32)
 #define WHISPER_MAX_BYTES    24000000UL // API hard limit is 25MB; stay safely under
@@ -96,7 +106,7 @@
 
 /* Time & firmware */
 #define LOCAL_TIME_OFFSET_MIN  120   // UTC+2 (Germany summer). Set to your offset.
-#define FIRMWARE_VERSION       "v1.2"
-#define FW_VERSION             "v1.2"
+#define FIRMWARE_VERSION       "v1.3"
+#define FW_VERSION             "v1.3"
 
 #endif // CONFIG_H

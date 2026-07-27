@@ -19,6 +19,9 @@ bool syncWasCancelled();     // true if the last transcribeAll() was cancelled b
 // true and puts the reply in `answerOut`. On failure returns false and sets the
 // sync-error reason (429 = no credit, 401 = bad key) so the UI can explain it.
 bool botAsk(const String& question, String& answerOut);
+// Fetch spoken audio for `text` from ElevenLabs (PCM 16kHz) into TTS_TMP_PCM on
+// SD. Returns true on success. Play it back with speakTtsFile().
+bool ttsFetch(const String& text);
 bool transcribeToText(const String& wavPath, String& out);
 
 // Connect to the best available known WiFi network. Scans for in-range

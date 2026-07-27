@@ -13,6 +13,7 @@ extern int       tagCursor;
 extern int       menuCursor;
 extern int       settingsCursor;
 extern bool      soundsOn;
+extern bool      ttsOn;           // read bot answers aloud (runtime toggle)
 extern int       activeFilter;
 extern int       lastRecNum;
 

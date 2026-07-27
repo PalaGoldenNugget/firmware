@@ -12,6 +12,8 @@ extern "C" {
 #include "../../src/audio/audio_bsp.h"
 }
 
+bool g_lastRecTooShort = false;   // set by record() when a note was discarded for being too short
+
 bool record() {
   int num = nextNoteNumber();
   char path[64]; snprintf(path, sizeof(path), "%s/note_%03d.wav", NOTES_DIR, num);
@@ -41,6 +43,19 @@ bool record() {
   }
 
   heap_caps_free(sbuf); heap_caps_free(mbuf);
+
+  // Discard notes shorter than the minimum — don't clutter storage/index with
+  // accidental taps. The file is already on disk, so delete it and bail.
+  const uint32_t minBytes = (uint32_t)MIN_NOTE_SECONDS * SAMPLE_RATE * 2;
+  if (totalMono < minBytes) {
+    f.close();
+    SD_MMC.remove(path);
+    g_lastRecTooShort = true;
+    Serial.printf("[Rec] discarded: %lu bytes (< %lu min)\n",
+                  (unsigned long)totalMono, (unsigned long)minBytes);
+    return false;
+  }
+  g_lastRecTooShort = false;
 
   f.seek(0);
   uint32_t dB=totalMono, fS=dB+36, bR=SAMPLE_RATE*2;
@@ -185,4 +200,60 @@ bool recordQuestion(const char* path, void (*onTick)(int secsLeft)) {
   f.close();
 
   return totalMono > 1000;
+}
+
+// Play a raw 16-bit mono 16kHz PCM file (no WAV header) to the speaker — used
+// for ElevenLabs TTS output, which is headerless PCM. Mirrors playWavFile but
+// reads from byte 0 (no 44-byte header to skip). A BOOT tap stops playback.
+bool speakPcmFile(const char* path) {
+  File f = SD_MMC.open(path);
+  if (!f) return false;
+  if (f.size() < 2) { f.close(); return false; }
+
+  const int monoBytes = 1024;
+  uint8_t* monoBuf   = (uint8_t*)heap_caps_malloc(monoBytes,     MALLOC_CAP_8BIT);
+  int16_t* stereoBuf = (int16_t*)heap_caps_malloc(monoBytes * 2, MALLOC_CAP_8BIT);
+  if (!monoBuf || !stereoBuf) {
+    if (monoBuf)   heap_caps_free(monoBuf);
+    if (stereoBuf) heap_caps_free(stereoBuf);
+    f.close();
+    return false;
+  }
+
+  audioPlaying = true;
+  stopPlayback = false;
+  palaSoundSetEnabled(false);
+  audio_playback_set_vol(TTS_VOLUME);
+
+  while (f.available() && !stopPlayback) {
+    int readBytes = f.read(monoBuf, monoBytes);
+    if (readBytes <= 0) break;
+    if (readBytes & 1) readBytes--;
+
+    int samples = readBytes / 2;
+    int16_t* mono = (int16_t*)monoBuf;
+    for (int i = 0; i < samples; i++) {
+      int16_t s = mono[i];
+      stereoBuf[i * 2 + 0] = s;
+      stereoBuf[i * 2 + 1] = s;
+    }
+    audio_playback_write((void*)stereoBuf, (uint32_t)(samples * 2 * sizeof(int16_t)));
+
+    if (digitalRead(BTN_REC) == LOW) {
+      delay(20);
+      if (digitalRead(BTN_REC) == LOW) {
+        while (digitalRead(BTN_REC) == LOW) delay(5);
+        stopPlayback = true;
+      }
+    }
+  }
+
+  audio_playback_set_vol(0);
+  palaSoundSetEnabled(true);
+  heap_caps_free(monoBuf);
+  heap_caps_free(stereoBuf);
+  f.close();
+  audioPlaying = false;
+  stopPlayback = false;
+  return true;
 }

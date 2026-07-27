@@ -498,6 +498,68 @@ bool botAsk(const String& question, String& answerOut) {
   return true;
 }
 
+// Fetch spoken audio for `text` from ElevenLabs as raw 16kHz PCM, streamed to
+// TTS_TMP_PCM on the SD card. Returns true on success.
+bool ttsFetch(const String& text) {
+  String body = text;
+  if (body.length() > TTS_MAX_CHARS) body = body.substring(0, TTS_MAX_CHARS);
+
+  String json = String("{\"text\":\"") + jsonEscape(body)
+              + "\",\"model_id\":\"" + TTS_MODEL + "\"}";
+
+  WiFiClientSecure client;
+  client.setInsecure();   // TODO: pin api.elevenlabs.io cert for production use
+  client.setTimeout(TTS_TIMEOUT_MS / 1000);
+  if (!client.connect("api.elevenlabs.io", 443)) { Serial.println("[TTS] connect failed"); return false; }
+
+  String path = String("/v1/text-to-speech/") + ELEVENLABS_VOICE_ID
+              + "?output_format=" + TTS_OUTPUT_FORMAT;
+  client.printf("POST %s HTTP/1.1\r\n", path.c_str());
+  client.print("Host: api.elevenlabs.io\r\n");
+  client.printf("xi-api-key: %s\r\n", ELEVENLABS_KEY);
+  client.print("Content-Type: application/json\r\n");
+  client.print("Accept: audio/basic\r\n");
+  client.printf("Content-Length: %u\r\n", (unsigned)json.length());
+  client.print("Connection: close\r\n\r\n");
+  client.print(json);
+
+  uint32_t deadline = millis() + TTS_TIMEOUT_MS;
+  while (!client.available() && millis() < deadline) delay(20);
+
+  // Status line
+  String status = client.readStringUntil('\n');
+  if (status.indexOf(" 200 ") < 0) {
+    Serial.printf("[TTS] %s\n", status.c_str());
+    client.stop();
+    return false;
+  }
+  // Skip headers
+  while (client.connected() || client.available()) {
+    String line = client.readStringUntil('\n');
+    if (line == "\r" || line.length() <= 1) break;
+  }
+
+  // Stream the raw PCM body to SD.
+  SD_MMC.remove(TTS_TMP_PCM);
+  File out = SD_MMC.open(TTS_TMP_PCM, FILE_WRITE);
+  if (!out) { client.stop(); return false; }
+
+  uint8_t* buf = (uint8_t*)heap_caps_malloc(2048, MALLOC_CAP_8BIT);
+  if (!buf) { out.close(); client.stop(); return false; }
+  uint32_t total = 0;
+  while ((client.connected() || client.available()) && millis() < deadline) {
+    int n = client.read(buf, 2048);
+    if (n > 0) { out.write(buf, n); total += n; }
+    else delay(3);
+  }
+  heap_caps_free(buf);
+  out.close();
+  client.stop();
+
+  Serial.printf("[TTS] wrote %lu bytes\n", (unsigned long)total);
+  return total > 0;
+}
+
 void transcribeAll() {
   g_syncError = SYNC_OK;                 // reset at the start of each pass
   g_syncCancel = false;                  // clear any stale cancel

@@ -47,9 +47,9 @@ extern "C" {
 // All pin, timing, path and threshold constants live in config.h.
 
 // ─── Content arrays ───────────────────────────────────────────────────────
-const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Buy", "Private", "Task", "Bot" };
+const char* DEFAULT_TAGS[]    = { "Note", "Work", "Idea", "Instrument", "Private", "Task", "Bot" };
 const char* MENU_ITEMS[]     = { "Notes", "Tags", "Sync", "Settings" };
-const char* SETTINGS_ITEMS[] = { "Sounds", "Transfer", "Device" };
+const char* SETTINGS_ITEMS[] = { "Sounds", "Read Aloud", "Transfer", "Device" };
 
 // ─── Global variable definitions ─────────────────────────────────────────
 board_power_bsp_t      board(EPD_PWR_PIN, Audio_PWR_PIN, VBAT_PWR_PIN);
@@ -63,6 +63,7 @@ int      tagCursor      = 2;
 int      menuCursor     = 0;
 int      settingsCursor = 0;
 bool     soundsOn       = true;
+bool     ttsOn          = true;   // read bot answers aloud (menu-toggleable)
 int      activeFilter   = -1;
 int      lastRecNum     = -1;
 
@@ -110,8 +111,12 @@ void startRecordFlow() {
   palaSoundSetEnabled(true);
 
   if (!recOk) {
-    showError("REC FAIL");
-    delay(1600);
+    if (g_lastRecTooShort) {
+      showError("TOO SHORT");   // intentional discard, not a failure
+    } else {
+      showError("REC FAIL");
+    }
+    delay(1400);
     state = STATE_IDLE;
     showIdle();
     return;
@@ -230,25 +235,8 @@ static bool ensureWifi() {
 // Save the Q&A as a Bot-tagged note so it's findable in the portal. Reuses the
 // note machinery: the question audio becomes the note's WAV, and the transcript
 // file holds "Q: ... / A: ...".
-static void saveBotNote(const String& question, const String& answer) {
-  int num = nextNoteNumber();
-  char wav[64], txt[64];
-  snprintf(wav, sizeof(wav), "%s/note_%03d.wav", NOTES_DIR, num);
-  snprintf(txt, sizeof(txt), "%s/note_%03d.txt", NOTES_DIR, num);
-
-  // Move the temp question WAV into place as this note's audio.
-  SD_MMC.rename(BOT_TMP_WAV, wav);
-
-  File tf = SD_MMC.open(txt, FILE_WRITE);
-  if (tf) {
-    tf.print("Q: "); tf.println(question);
-    tf.print("A: "); tf.println(answer);
-    tf.close();
-  }
-  addToIndex(num, BOT_TAG, true);   // hasText = true (already have transcript)
-  saveTag(num, BOT_TAG);
-  saveIndex();
-}
+// (Bot queries are intentionally not stored — no saveBotNote. The temp question
+// recording is deleted after the answer is shown.)
 
 void startBotFlow() {
   // 1) Record the spoken question for a fixed window (no per-second screen
@@ -284,12 +272,12 @@ void startBotFlow() {
     state = STATE_IDLE; showIdle(); return;
   }
 
-  // 4) Ask the chat model.
+  // 4) Ask the chat model. Keep WiFi UP — TTS (below) needs it too.
   String answer;
   bool ok = botAsk(question, answer);
-  WiFi.disconnect(true);
 
   if (!ok) {
+    WiFi.disconnect(true);
     SyncError e = lastSyncError();
     if      (e == SYNC_ERR_NO_CREDIT) showSyncError("Insufficient", "ChatGPT credit.", "Add funds.");
     else if (e == SYNC_ERR_AUTH)      showSyncError("API key rejected.", "Check your key", "in secrets.h");
@@ -299,15 +287,36 @@ void startBotFlow() {
     state = STATE_IDLE; showIdle(); return;
   }
 
-  // 5) Save the Q&A, then show the "aha!" beat before the answer.
-  saveBotNote(question, answer);
-  soundSaved();
+  // 5) Show the "aha!" beat. Bot queries are NOT stored — no note, transcript,
+  //    or index entry — so delete the temp question audio.
+  SD_MMC.remove(BOT_TMP_WAV);
   showBotResponse();
   delay(3000);
+
   botAnswer = answer;
   botAnswerPage = 0;
+
+  // 6) If read-aloud is enabled, fetch the voice FIRST (keeping the "aha!"
+  //    screen up meanwhile) so the answer text appears in sync with the audio.
+  //    If TTS is off or the fetch fails, just show the text right away.
+  bool haveVoice = false;
+#if TTS_ENABLED
+  if (ttsOn) {
+    drawWifiCorner();               // small "working" indicator over the "aha!" screen
+    haveVoice = ttsFetch(answer);   // "aha!" screen stays up during the download
+  }
+#endif
+  WiFi.disconnect(true);
+
+  // Now reveal the answer text.
   state = STATE_BOT_ANSWER;
   showBotAnswer(botAnswer, botAnswerPage);
+
+  // Play the downloaded voice (blocking; a BOOT tap during playback stops it).
+  if (haveVoice) {
+    speakPcmFile(TTS_TMP_PCM);
+    SD_MMC.remove(TTS_TMP_PCM);
+  }
 }
 
 void startSyncFlow() {
@@ -622,6 +631,9 @@ void loop() {
         palaSoundSetEnabled(!palaSoundIsEnabled());
         showSettings(settingsCursor);
       } else if (settingsCursor == 1) {
+        ttsOn = !ttsOn;                    // toggle read-aloud
+        showSettings(settingsCursor);
+      } else if (settingsCursor == 2) {
         startTransferMode();
       } else {
         state = STATE_DEVICE_INFO;

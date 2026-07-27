@@ -743,17 +743,20 @@ void showSettings(int cursor) {
   clearWhite();
   drawStr(16, 14, "settings", 1, BLACK);
   hline(16, 32, W-32, BLACK);
-  const int y0 = 46, step = 44;
+  const int y0 = 40, step = 40;
   for (int row = 0; row < SETTINGS_COUNT; row++) {
     bool active = row == cursor;
     int y = y0 + row * step;
-    if (active) fillRoundRect(16, y, 168, 36, 8, BLACK);
-    else        strokeRoundRect(16, y, 168, 36, 8, 1, BLACK);
+    if (active) fillRoundRect(16, y, 168, 34, 8, BLACK);
+    else        strokeRoundRect(16, y, 168, 34, 8, 1, BLACK);
     uint8_t col = active ? WHITE : BLACK;
     if (row == 0) {
       drawStr(28, y + 8, "sounds", 1, col);
       drawStr(W - 70, y + 8, palaSoundIsEnabled() ? "on" : "off", 1, col);
     } else if (row == 1) {
+      drawStr(28, y + 8, "read aloud", 1, col);
+      drawStr(W - 70, y + 8, ttsOn ? "on" : "off", 1, col);
+    } else if (row == 2) {
       drawStr(28, y + 8, "transfer", 1, col);
     } else {
       drawStr(28, y + 8, "device", 1, col);
