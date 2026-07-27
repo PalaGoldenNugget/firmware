@@ -1,4 +1,55 @@
-[RELEASE_NOTES_v1.2.md](https://github.com/user-attachments/files/30366548/RELEASE_NOTES_v1.2.md)
+# Golden Nugget — Firmware v1.3 Release Notes
+
+This release adds spoken answers from the Voice Bot, fixes an audio-quality issue
+in long recordings, and tidies up how notes are stored.
+
+---
+
+## New
+
+**The Voice Bot now talks back**
+When you ask the bot a question, it now reads the answer aloud through the
+device speaker using ElevenLabs, right after the answer appears. The answer text
+and the voice arrive together, so there's no silent gap. Tap the front button to
+stop the voice early.
+
+**Read-aloud on/off in Settings**
+A new "read aloud" toggle in the Settings menu turns spoken answers on or off
+whenever you like — no re-flashing needed.
+
+---
+
+## Fixed
+
+**Audio dropouts in long recordings**
+Long recordings had small gaps at a regular interval (audible on playback, and
+missing words in the transcript). This was the countdown display briefly
+interrupting audio capture; the recording buffer has been enlarged so audio is
+captured continuously. Long recordings should now be gap-free.
+
+---
+
+## Changed
+
+**Cleaner storage**
+- Very short accidental recordings (under 1 second) are no longer saved.
+- Bot questions and answers are no longer stored on the device — the answer is
+  shown (and now spoken), but nothing is written to the card.
+
+---
+
+## Notes for this release
+
+- Read-aloud requires an ElevenLabs account and API key (set in secrets.h), with
+  available character credits. It uses a device-friendly audio format that works
+  on ElevenLabs' lower tiers.
+- Read-aloud is billed per character by ElevenLabs; short answers are cheap, and
+  the free monthly credits cover occasional use.
+- The read-aloud toggle resets to "on" at each power-up (matching the sounds
+  toggle). The master switch is still the TTS_ENABLED setting in the firmware.
+- OpenAI (bot + transcription) still requires its own funded API key.
+- Wi-Fi is 2.4GHz only.
+
 # Firmware v1.2 Release Notes
 
 A custom build on the Pala Note base, rebranded "Golden Nugget," adding long-form
