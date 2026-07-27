@@ -9,7 +9,7 @@
 // ElevenLabs text-to-speech (reads bot answers aloud). Get the key from your
 // ElevenLabs Profile page, and a voice ID from the Voices page (or the API).
 #define ELEVENLABS_KEY      "...."
-#define ELEVENLABS_VOICE_ID "21m00Tcm4TlvDq8ikWAM"   // default "Rachel" voice; replace as desired
+#define ELEVENLABS_VOICE_ID "nPczCjzI2devNBz1zQrb"   // default "Rachel" voice; replace as desired
 
 // Additional known networks. The device scans, then connects to the strongest
 // one it can see from this list (plus any in /wifi.txt on the SD card). Add as
